@@ -6,6 +6,7 @@
 
 int g_counter;
 
+// basic TAS(test and set) spin lock
 class SpinLock
 {
   public:
@@ -54,6 +55,35 @@ class SpinLockWrong
     std::atomic<bool> m_is_locked {false};
 };
 
+// TTAS(test test and set) spin lock
+class SpinLockTTAS
+{
+  public:
+    SpinLockTTAS() = default;
+
+    void lock()
+    {
+        while (true)
+        {
+            // TAS
+            if (!m_flag.exchange(true, std::memory_order_acquire)) { break; }
+
+            // test loop
+            // avoiding read-modify-write operation loop, to reduce cache coherency traffic
+            while (m_flag.load(std::memory_order_relaxed)) {}
+        }
+    }
+
+    void unlock()
+    {
+        // set flag to false
+        m_flag.store(false, std::memory_order_release);
+    }
+
+  private:
+    std::atomic<bool> m_flag {false};
+};
+
 // add function without spin lock
 // data race exists
 void add(int num)
@@ -80,14 +110,26 @@ void     add_with_spinlock(int num)
 }
 
 // add function with spin lock which is wrong implementation
-SpinLockWrong g_spin_lock_atomic;
+SpinLockWrong g_spin_lock_wrong;
 void          add_with_spinlock_wrong(int num)
 {
     for (int i = 0; i < num; i++)
     {
-        g_spin_lock_atomic.lock();
+        g_spin_lock_wrong.lock();
         g_counter = g_counter + 1;
-        g_spin_lock_atomic.unlock();
+        g_spin_lock_wrong.unlock();
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+}
+
+SpinLockTTAS g_spin_lock_ttas;
+void         add_with_spinlock_ttas(int num)
+{
+    for (int i = 0; i < num; i++)
+    {
+        g_spin_lock_ttas.lock();
+        g_counter = g_counter + 1;
+        g_spin_lock_ttas.unlock();
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 }
@@ -96,27 +138,56 @@ std::vector<std::thread> worker_threads;
 
 void main()
 {
-    int thread_num = 8;
+    int                       thread_num = 8;
+    std::chrono::steady_clock clock;
 
     std::cout << "begin...\n";
+    auto start = clock.now();
 
     g_counter = 0;
     for (int i = 0; i < thread_num; i++) { worker_threads.emplace_back(std::thread(add, 100)); }
 
     for (auto& thread : worker_threads) { thread.join(); }
+    auto end = clock.now();
+    std::cout << "time cost: " << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << " ms\n";
     std::cout << "add without spin lock, counter: " << g_counter << std::endl;
 
+    // reset
     g_counter = 0;
     worker_threads.clear();
+
+    std::cout << "begin...\n";
+    start = clock.now();
     for (int i = 0; i < thread_num; i++) { worker_threads.emplace_back(std::thread(add_with_spinlock, 100)); }
 
     for (auto& thread : worker_threads) { thread.join(); }
+    end = clock.now();
+    std::cout << "time cost: " << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << " ms\n";
     std::cout << "add with spin lock, counter: " << g_counter << std::endl;
 
+    // reset
     g_counter = 0;
     worker_threads.clear();
+
+    std::cout << "begin...\n";
+    start = clock.now();
     for (int i = 0; i < 8; i++) { worker_threads.emplace_back(std::thread(add_with_spinlock_wrong, 100)); }
 
     for (auto& thread : worker_threads) { thread.join(); }
+    end = clock.now();
+    std::cout << "time cost: " << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << " ms\n";
+    std::cout << "add with spin lock wrong, counter: " << g_counter << std::endl;
+
+    // reset
+    g_counter = 0;
+    worker_threads.clear();
+
+    std::cout << "begin...\n";
+    start = clock.now();
+    for (int i = 0; i < 8; i++) { worker_threads.emplace_back(std::thread(add_with_spinlock_ttas, 100)); }
+
+    for (auto& thread : worker_threads) { thread.join(); }
+    end = clock.now();
+    std::cout << "time cost: " << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << " ms\n";
     std::cout << "add with spin lock wrong, counter: " << g_counter << std::endl;
 }
