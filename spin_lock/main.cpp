@@ -1,6 +1,7 @@
 #include <atomic>
 #include <chrono>
 #include <iostream>
+#include <mutex>
 #include <thread>
 #include <vector>
 
@@ -134,8 +135,21 @@ void         add_with_spinlock_ttas(int num)
     }
 }
 
+std::mutex g_mutex;
+void       add_with_mutex(int num)
+{
+    for (int i = 0; i < num; i++)
+    {
+        g_mutex.lock();
+        g_counter = g_counter + 1;
+        g_mutex.unlock();
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+}
+
 std::vector<std::thread> worker_threads;
 
+// this time counting may be nonsensical
 void main()
 {
     int                       thread_num = 8;
@@ -150,7 +164,7 @@ void main()
     for (auto& thread : worker_threads) { thread.join(); }
     auto end = clock.now();
     std::cout << "time cost: " << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << " ms\n";
-    std::cout << "add without spin lock, counter: " << g_counter << std::endl;
+    std::cout << "add with data race, counter: " << g_counter << std::endl;
 
     // reset
     g_counter = 0;
@@ -189,5 +203,18 @@ void main()
     for (auto& thread : worker_threads) { thread.join(); }
     end = clock.now();
     std::cout << "time cost: " << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << " ms\n";
-    std::cout << "add with spin lock wrong, counter: " << g_counter << std::endl;
+    std::cout << "add with spin lock TTAS, counter: " << g_counter << std::endl;
+
+    // reset
+    g_counter = 0;
+    worker_threads.clear();
+
+    std::cout << "begin...\n";
+    start = clock.now();
+    for (int i = 0; i < 8; i++) { worker_threads.emplace_back(std::thread(add_with_mutex, 100)); }
+
+    for (auto& thread : worker_threads) { thread.join(); }
+    end = clock.now();
+    std::cout << "time cost: " << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << " ms\n";
+    std::cout << "add with mutex, counter: " << g_counter << std::endl;
 }
